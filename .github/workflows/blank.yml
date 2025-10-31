@@ -1,56 +1,77 @@
-import requests
-import json
-import time
+name: Multi-Tmate with Discord Webhook
 
-class ProxyManager:
-    def __init__(self):
-        self.proxy_sources = [
-            "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
-            "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
-            "https://www.proxy-list.download/api/v1/get?type=http"
-        ]
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  create-tmate-sessions:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        session_count: [1, 2, 3, 4, 5]
     
-    def fetch_proxies(self):
-        proxies = []
-        for source in self.proxy_sources:
-            try:
-                response = requests.get(source, timeout=10)
-                if response.status_code == 200:
-                    proxy_list = response.text.strip().split('\n')
-                    for proxy in proxy_list:
-                        if proxy.strip():
-                            proxies.append({
-                                'ip': proxy.split(':')[0],
-                                'port': proxy.split(':')[1] if ':' in proxy else '8080',
-                                'source': source
-                            })
-                time.sleep(1)  # Rate limiting
-            except Exception as e:
-                print(f"Error fetching from {source}: {e}")
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Install tmate and dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y tmate curl jq
         
-        return proxies
+    - name: Generate SSH key for tmate
+      run: |
+        mkdir -p ~/.ssh
+        ssh-keygen -t rsa -b 4096 -f ~/.ssh/tmate_key -N ""
+        
+    - name: Start tmate session
+      run: |
+        tmate -S /tmp/tmate${{ matrix.session_count }}.sock new-session -d
+        tmate -S /tmp/tmate${{ matrix.session_count }}.sock wait tmate-ready
+        
+    - name: Get tmate connection info
+      run: |
+        TMATE_SSH=$(tmate -S /tmp/tmate${{ matrix.session_count }}.sock display -p '#{tmate_ssh}')
+        echo "TMATE_SSH=$TMATE_SSH" >> $GITHUB_ENV
+        echo "$TMATE_SSH" > /tmp/tmate_${{ matrix.session_count }}.txt
+        
+    - name: Send to Discord Webhook
+      run: |
+        TMATE_SSH=$(cat /tmp/tmate_${{ matrix.session_count }}.txt)
+        
+        curl -H "Content-Type: application/json" \
+        -X POST \
+        -d "{\"content\": \"🎯 **Tmate Session ${{ matrix.session_count }}**\\n\\n**SSH Connection:**\\n\\`\\`\\`bash\\n$TMATE_SSH\\n\\`\\`\\`\\n\\n📅 Created: $(date)\n🔗 Session: ${{ matrix.session_count }} of 5\"}" \
+        https://discord.com/api/webhooks/1433727858806624327/WDuONWA8t99ZEaTvhGXVNJ-M3wwm9ehbaJBzy00EYeA1m5u0mg6RJJtnCTmgUzT6l6ZX
+      
+    - name: Display success message
+      run: |
+        echo "✅ Tmate session ${{ matrix.session_count }} created and sent to Discord!"
+        
+  proxy-integration:
+    runs-on: ubuntu-latest
+    needs: create-tmate-sessions
     
-    def test_proxy(self, proxy):
-        try:
-            test_url = "http://httpbin.org/ip"
-            response = requests.get(test_url, proxies={
-                'http': f"http://{proxy['ip']}:{proxy['port']}"
-            }, timeout=5)
-            return response.status_code == 200
-        except:
-            return False
-
-if __name__ == "__main__":
-    pm = ProxyManager()
-    proxies = pm.fetch_proxies()
-    
-    # Test and filter working proxies
-    working_proxies = []
-    for proxy in proxies[:10]:  # Test first 10
-        if pm.test_proxy(proxy):
-            working_proxies.append(proxy)
-    
-    with open('/workspaces/multi-proxy-codespace/config/proxies.json', 'w') as f:
-        json.dump(working_proxies, f, indent=2)
-    
-    print(f"✅ {len(working_proxies)} working proxies saved!")
+    steps:
+    - name: Fetch working proxies
+      run: |
+        curl -s "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all" > proxies.txt
+        
+        echo "🔄 Testing proxies..."
+        while read proxy; do
+          if timeout 5 curl -x "http://$proxy" -s http://httpbin.org/ip >/dev/null 2>&1; then
+            echo "$proxy" >> working_proxies.txt
+        done < proxies.txt
+        
+        echo "✅ Found $(wc -l < working_proxies.txt) working proxies!"
+        
+    - name: Send proxy summary to Discord
+      run: |
+        WORKING_COUNT=$(wc -l < working_proxies.txt 2>/dev/null || echo "0")
+        
+        curl -H "Content-Type: application/json" \
+        -X POST \
+        -d "{\"content\": \"🔧 **Proxy Summary**\\n\\nWorking Proxies: $WORKING_COUNT\\n\\n🚀 All tmate sessions created successfully!\", \"embeds\": [{\"title\": \"Multi-Tmate Setup Complete\", \"description\": \"✅ 5 tmate sessions created\\n🔄 $WORKING_COUNT working proxies found\\n\\n📊 **Ready for use!**\"}]}" \
+        https://discord.com/api/webhooks/1433727858806624327/WDuONWA8t99ZEaTvhGXVNJ-M3wwm9ehbaJBzy00EYeA1m5u0mg6RJJtnCTmgUzT6l6ZX
