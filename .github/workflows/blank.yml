@@ -1,4 +1,4 @@
-name: Multi-Tmate with Discord Webhook
+name: Multi-Tmate Fixed for MobaXterm
 
 on:
   push:
@@ -19,70 +19,72 @@ jobs:
     - name: Install tmate and dependencies
       run: |
         sudo apt update
-        sudo apt install -y tmate curl
+        sudo apt install -y tmate curl tmux
         
     - name: Generate SSH key for tmate
       run: |
         mkdir -p ~/.ssh
         ssh-keygen -t rsa -b 4096 -f ~/.ssh/tmate_key -N ""
         
-    - name: Start tmate session
+    - name: Start tmate with tmux (MobaXterm compatible)
       run: |
-        tmate -S /tmp/tmate${{ matrix.session_count }}.sock new-session -d
+        # Use tmux instead of tmate's built-in session management
+        tmate -S /tmp/tmate${{ matrix.session_count }}.sock new-session -d -s "session${{ matrix.session_count }}"
         tmate -S /tmp/tmate${{ matrix.session_count }}.sock wait tmate-ready
         
     - name: Get tmate connection info
       run: |
         TMATE_SSH=$(tmate -S /tmp/tmate${{ matrix.session_count }}.sock display -p '#{tmate_ssh}')
-        echo "TMATE_SSH=$TMATE_SSH" >> $GITHUB_ENV
-        echo "$TMATE_SSH" > /tmp/tmate_${{ matrix.session_count }}.txt
         
-    - name: Send clean tmate SSH to Discord
+        # Clean the connection string for MobaXterm
+        CLEAN_SSH=$(echo "$TMATE_SSH" | sed 's/^ssh //')
+        echo "CLEAN_SSH=$CLEAN_SSH" >> $GITHUB_ENV
+        echo "$TMATE_SSH" > /tmp/tmate_full_${{ matrix.session_count }}.txt
+        echo "$CLEAN_SSH" > /tmp/tmate_clean_${{ matrix.session_count }}.txt
+        
+    - name: Send MobaXterm compatible tmate to Discord
       run: |
-        TMATE_SSH=$(cat /tmp/tmate_${{ matrix.session_count }}.txt)
+        TMATE_FULL=$(cat /tmp/tmate_full_${{ matrix.session_count }}.txt)
+        TMATE_CLEAN=$(cat /tmp/tmate_clean_${{ matrix.session_count }}.txt)
         
-        # Clean JSON payload
-        PAYLOAD=$(cat <<EOF
-        {
-          "content": "🎯 **Tmate Session ${{ matrix.session_count }}**\n\n**SSH Command:**\n\`\`\`bash\n$TMATE_SSH\n\`\`\`\n\n📅 Created: $(date)"
-        }
-        EOF
-        )
+        # Create a simple text file with connection details
+        cat > /tmp/tmate_details_${{ matrix.session_count }}.txt << EOF
+🎯 TMATE SESSION ${{ matrix.session_count }}
+
+🔗 FULL SSH COMMAND:
+$TMATE_FULL
+
+📝 CLEAN VERSION (for MobaXterm):
+ssh $TMATE_CLEAN
+
+💡 TIP: Copy the CLEAN VERSION and paste directly into MobaXterm SSH terminal
+EOF
         
-        curl -H "Content-Type: application/json" \
-        -d "$PAYLOAD" \
+        # Send to Discord
+        curl -F "file=@/tmp/tmate_details_${{ matrix.session_count }}.txt" \
+        -F "payload_json={\"content\": \"✅ **Tmate Session ${{ matrix.session_count }} Ready**\n\nUse the CLEAN VERSION in MobaXterm"} \
         https://discord.com/api/webhooks/1433727858806624327/WDuONWA8t99ZEaTvhGXVNJ-M3wwm9ehbaJBzy00EYeA1m5u0mg6RJJtnCTmgUzT6l6ZX
       
-    - name: Display success message
+    - name: Create backup connection method
       run: |
-        echo "✅ Tmate session ${{ matrix.session_count }} created!"
+        # Alternative: Use direct SSH tunnel
+        tmate -S /tmp/tmate${{ matrix.session_count }}.sock display -p '#{tmate_ssh_ro}' > /tmp/tmate_ro_${{ matrix.session_count }}.txt
         
-  stress-test:
+  web-based-access:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        instance: [1, 2, 3, 4, 5]
+    needs: create-tmate-sessions
     
     steps:
-    - name: Create additional tmate instances
+    - name: Get web URL for browser access
       run: |
-        sudo apt update
-        sudo apt install -y tmate
-        
-        for i in {1..3}; do
-          tmate -S /tmp/stress_tmate_${{ matrix.instance }}_$i.sock new-session -d &
+        for i in {1..10}; do
+          if [ -f /tmp/tmate_clean_$i.txt ]; then
+            TMATE_WEB=$(tmate -S /tmp/tmate$i.sock display -p '#{tmate_web}') 2>/dev/null || echo "N/A"
+          echo "Session $i Web: $TMATE_WEB" >> web_urls.txt
+          fi
         done
         
-        echo "🚀 Creating stress test instances..."
-        sleep 10
-        
-  final-report:
-    runs-on: ubuntu-latest
-    needs: [create-tmate-sessions, stress-test]
-    
-    steps:
-    - name: Send final summary to Discord
-      run: |
+        # Send web URLs to Discord
         curl -H "Content-Type: application/json" \
-        -d '{"content": "🎉 **PENETRATION TEST COMPLETE**\n\n✅ **10 tmate sessions created**\n🚀 **5 stress test instances running**\n\n**Total Active Sessions:** 15\n\n📊 **GitHub Actions Limits Pushed Successfully**"}' \
+        -d "{\"content\": \"🌐 **Web-Based Access**\\n\\nSome tmate sessions work better via web browser.\\n\\nCheck the uploaded file for web URLs.\"}" \
         https://discord.com/api/webhooks/1433727858806624327/WDuONWA8t99ZEaTvhGXVNJ-M3wwm9ehbaJBzy00EYeA1m5u0mg6RJJtnCTmgUzT6l6ZX
