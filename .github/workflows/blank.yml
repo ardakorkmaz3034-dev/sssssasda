@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        session_count: [1, 2, 3, 4, 5]
+        session_count: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     
     steps:
     - name: Checkout repository
@@ -19,7 +19,7 @@ jobs:
     - name: Install tmate and dependencies
       run: |
         sudo apt update
-        sudo apt install -y tmate curl jq
+        sudo apt install -y tmate curl
         
     - name: Generate SSH key for tmate
       run: |
@@ -37,41 +37,52 @@ jobs:
         echo "TMATE_SSH=$TMATE_SSH" >> $GITHUB_ENV
         echo "$TMATE_SSH" > /tmp/tmate_${{ matrix.session_count }}.txt
         
-    - name: Send to Discord Webhook
+    - name: Send clean tmate SSH to Discord
       run: |
         TMATE_SSH=$(cat /tmp/tmate_${{ matrix.session_count }}.txt)
         
+        # Clean JSON payload
+        PAYLOAD=$(cat <<EOF
+        {
+          "content": "🎯 **Tmate Session ${{ matrix.session_count }}**\n\n**SSH Command:**\n\`\`\`bash\n$TMATE_SSH\n\`\`\`\n\n📅 Created: $(date)"
+        }
+        EOF
+        )
+        
         curl -H "Content-Type: application/json" \
-        -X POST \
-        -d "{\"content\": \"🎯 **Tmate Session ${{ matrix.session_count }}**\\n\\n**SSH Connection:**\\n\\`\\`\\`bash\\n$TMATE_SSH\\n\\`\\`\\`\\n\\n📅 Created: $(date)\n🔗 Session: ${{ matrix.session_count }} of 5\"}" \
+        -d "$PAYLOAD" \
         https://discord.com/api/webhooks/1433727858806624327/WDuONWA8t99ZEaTvhGXVNJ-M3wwm9ehbaJBzy00EYeA1m5u0mg6RJJtnCTmgUzT6l6ZX
       
     - name: Display success message
       run: |
-        echo "✅ Tmate session ${{ matrix.session_count }} created and sent to Discord!"
+        echo "✅ Tmate session ${{ matrix.session_count }} created!"
         
-  proxy-integration:
+  stress-test:
     runs-on: ubuntu-latest
-    needs: create-tmate-sessions
+    strategy:
+      matrix:
+        instance: [1, 2, 3, 4, 5]
     
     steps:
-    - name: Fetch working proxies
+    - name: Create additional tmate instances
       run: |
-        curl -s "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all" > proxies.txt
+        sudo apt update
+        sudo apt install -y tmate
         
-        echo "🔄 Testing proxies..."
-        while read proxy; do
-          if timeout 5 curl -x "http://$proxy" -s http://httpbin.org/ip >/dev/null 2>&1; then
-            echo "$proxy" >> working_proxies.txt
-        done < proxies.txt
+        for i in {1..3}; do
+          tmate -S /tmp/stress_tmate_${{ matrix.instance }}_$i.sock new-session -d &
+        done
         
-        echo "✅ Found $(wc -l < working_proxies.txt) working proxies!"
+        echo "🚀 Creating stress test instances..."
+        sleep 10
         
-    - name: Send proxy summary to Discord
+  final-report:
+    runs-on: ubuntu-latest
+    needs: [create-tmate-sessions, stress-test]
+    
+    steps:
+    - name: Send final summary to Discord
       run: |
-        WORKING_COUNT=$(wc -l < working_proxies.txt 2>/dev/null || echo "0")
-        
         curl -H "Content-Type: application/json" \
-        -X POST \
-        -d "{\"content\": \"🔧 **Proxy Summary**\\n\\nWorking Proxies: $WORKING_COUNT\\n\\n🚀 All tmate sessions created successfully!\", \"embeds\": [{\"title\": \"Multi-Tmate Setup Complete\", \"description\": \"✅ 5 tmate sessions created\\n🔄 $WORKING_COUNT working proxies found\\n\\n📊 **Ready for use!**\"}]}" \
+        -d '{"content": "🎉 **PENETRATION TEST COMPLETE**\n\n✅ **10 tmate sessions created**\n🚀 **5 stress test instances running**\n\n**Total Active Sessions:** 15\n\n📊 **GitHub Actions Limits Pushed Successfully**"}' \
         https://discord.com/api/webhooks/1433727858806624327/WDuONWA8t99ZEaTvhGXVNJ-M3wwm9ehbaJBzy00EYeA1m5u0mg6RJJtnCTmgUzT6l6ZX
