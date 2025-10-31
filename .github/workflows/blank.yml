@@ -1,0 +1,56 @@
+import requests
+import json
+import time
+
+class ProxyManager:
+    def __init__(self):
+        self.proxy_sources = [
+            "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
+            "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+            "https://www.proxy-list.download/api/v1/get?type=http"
+        ]
+    
+    def fetch_proxies(self):
+        proxies = []
+        for source in self.proxy_sources:
+            try:
+                response = requests.get(source, timeout=10)
+                if response.status_code == 200:
+                    proxy_list = response.text.strip().split('\n')
+                    for proxy in proxy_list:
+                        if proxy.strip():
+                            proxies.append({
+                                'ip': proxy.split(':')[0],
+                                'port': proxy.split(':')[1] if ':' in proxy else '8080',
+                                'source': source
+                            })
+                time.sleep(1)  # Rate limiting
+            except Exception as e:
+                print(f"Error fetching from {source}: {e}")
+        
+        return proxies
+    
+    def test_proxy(self, proxy):
+        try:
+            test_url = "http://httpbin.org/ip"
+            response = requests.get(test_url, proxies={
+                'http': f"http://{proxy['ip']}:{proxy['port']}"
+            }, timeout=5)
+            return response.status_code == 200
+        except:
+            return False
+
+if __name__ == "__main__":
+    pm = ProxyManager()
+    proxies = pm.fetch_proxies()
+    
+    # Test and filter working proxies
+    working_proxies = []
+    for proxy in proxies[:10]:  # Test first 10
+        if pm.test_proxy(proxy):
+            working_proxies.append(proxy)
+    
+    with open('/workspaces/multi-proxy-codespace/config/proxies.json', 'w') as f:
+        json.dump(working_proxies, f, indent=2)
+    
+    print(f"✅ {len(working_proxies)} working proxies saved!")
